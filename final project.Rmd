@@ -1,0 +1,221 @@
+---
+title: "Diabetic Retinopathy Survival Analysis"
+author: "Ashley Son, Matthew Lee, Victor Bai"
+date: "2022-11-22"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+require(survival)
+require(MASS)
+require(survminer)
+```
+
+Data Description
+
+  The data set we selected for this project is the “diabetic” data set from the survival library which consists of a 50% random sample of patients with”high-risk” diabetic retinopathy. Each patient had one eye randomized to laser treatment and the other eye recieved no treatment. For each eye, the event of interest was the time from initiation of treatment to the time when visual acuity dropped below 5/200 two visits in a row. The survival time for this data set measures the actual time to blindness in months with censoring caused by dropout, death, or end of the study.
+  
+  
+Covariates
+
+  id: patients id
+  laser: laser type: xenon or agon
+  age: age of which the patient was diagnosed
+  eye: patient’s eye: left or right
+  trt: whether patient was given treatment; 0 = no treatment, 1 = laser risk: risk group ranging from 6-12
+  time: actual time to blindness in months or last follow-up
+  
+  
+Research Question
+
+  We are interested to see whether laser, age, eye, or treatment would lead to difference in the survival time of the patients. 
+  
+  
+Survival Function
+
+```{r}
+diabetic_surv <- Surv(diabetic$time, diabetic$status)
+diabeticfit <- survfit(diabetic_surv~1)
+```
+
+
+KM plot of the diabetic data
+
+```{r}
+ggsurvplot(diabeticfit, data = diabetic,
+          ggtheme = theme_bw(), 
+          palette = c("#E7B800", "#2E9FDF"))+ggtitle("KM Curve for all covariates")
+```
+  
+  
+Preprocessing Data
+
+  Making sure there are no NA values
+```{r}
+apply(diabetic, 2, function(x) sum(sapply(x, is.na)))
+```
+
+
+Looking at survival time distribution
+
+```{r}
+summary(diabetic)
+ggplot(diabetic, aes(x = time)) + geom_density(fill = "light green") + ggtitle("Survival time distribution")
+```
+
+
+Model Building
+
+  We will now build coxPH models using the following covariates:
+    laser, age, eye, trt, risk
+
+AGE
+```{R} 
+juvenile <- 1*(as.numeric(diabetic$age) < 20)
+adult <- 1*(as.numeric(diabetic$age) > 20)
+agefit <- survfit(Surv(time, status) ~juvenile, data = diabetic)
+ggsurvplot(agefit, data = diabetic, legend.labs = c("Adult", "Juvenile"))
+summary(coxph(diabetic_surv~juvenile, data = diabetic))
+summary(coxph(diabetic_surv~age, data = diabetic))
+```
+We have clustered the age data into two groups, juvenile and adult. Juvenile contains all the subjects who are less than 20 years old and Adult contains subjects whos age are above 20. 
+
+EYE
+```{R} 
+eyefit <- survfit(Surv(time, status)~eye, data = diabetic)
+ggsurvplot(eyefit, data = diabetic)
+summary(coxph(diabetic_surv~eye, data = diabetic))
+```
+
+LASER
+```{R}
+laserfit <- survfit(Surv(time,status) ~ trt, data = diabetic)
+ggsurvplot(laserfit, data = diabetic)
+summary(coxph(diabetic_surv~laser, data = diabetic))
+```
+
+TREATMENT
+```{R}
+trtfit <- survfit(Surv(time, status) ~ trt, data = diabetic)
+ggsurvplot(trtfit, data = diabetic)
+summary(coxph(diabetic_surv ~trt, data = diabetic))
+```
+
+RISK
+```{R}
+riskfit <- survfit(Surv(time, status) ~ risk, data = diabetic)
+ggsurvplot(riskfit, data = diabetic)
+summary(coxph(diabetic_surv ~risk, data = diabetic))
+```
+
+
+Log Rank test to Confirm KM
+
+  After plotting Kaplan-Meier curves, we conduct a log rank test on each variable. We see that the p-value of risk and treatment are smaller than 0.05, which means these variables have significant effects on the successfulness of surgery.
+```{r}
+survdiff(formula = diabetic_surv ~ juvenile, data = diabetic)
+survdiff(formula = diabetic_surv ~ eye, data = diabetic)
+survdiff(formula = diabetic_surv ~ laser, data = diabetic)
+survdiff(formula = diabetic_surv ~ trt, data = diabetic)
+survdiff(formula = diabetic_surv ~ risk, data = diabetic)
+```
+
+
+Model Building
+
+  Now, we start to build our Cox PH model. We are using both backward elimination method and forward stepwise selection method to pick the right set of covariates. First we build a full model with all covariates. Then we can use the function “step” in R to apply backward elimination. It shows that the risk and trt are the two significant variables.
+  
+  (backward selection)
+```{r}
+full = coxph(diabetic_surv ~ age + risk + laser + trt + eye, data = diabetic)
+step(full, direction = "backward")
+```
+  
+  (forward selection)
+```{r}
+##compare pvalues
+fit1 <- coxph(diabetic_surv ~ risk + trt + laser + eye, data = diabetic)
+##Forward selection
+fit2 <- coxph(diabetic_surv ~ 1, diabetic)
+stepAIC(fit2, direction = "forward", scope = list(upper = fit1, lower = fit2))
+```
+Using forward and backward selection and comparing AIC values it is shown that the p-values for treatment and risk are lower than the 0.05 significance level. It can be concluded that these two covariates affect the survival time. 
+
+
+Model Checking
+
+```{r}
+anova(fit1)
+```
+Looking at the analysis of variance table, it is confirmed that both the covariates, risk and treatment are signficant.
+
+
+Residual Tests and Internation Term
+
+We will look to see if we need to stratify
+
+```{r}
+diabetic.zph <- cox.zph(coxph(diabetic_surv ~ risk * trt, data = diabetic))
+diabetic.zph
+ggcoxzph(diabetic.zph)
+```
+Since none of the pvalues are less than the significance level of 0.05, we do not need to stratify. 
+Looking at the interaction term, we can assume that treatment and risk is not correlated thus not statistically significant since the pvalue is greater than 0.05.
+
+
+Log Log plot
+We will check again to see if we need to stratify for treatment.
+```{r}
+#loglog plot
+cloglog = function(x){log(-log(x))}
+
+#treatment log log plot
+km.est <- survfit(diabetic_surv ~ trt, data = diabetic)
+ggsurvplot(km.est, fun = "cloglog", xlab = "time", ylab = "log-log survival", main = "log-log curves", legend.labs = c("Control", "Treated"), title = "log-log plot for covariate trt")
+
+km.est2 <- survfit(diabetic_surv ~ risk, data = diabetic)
+ggsurvplot(km.est2, fun = "cloglog", xlab = "time", ylab = "log-log survival", main = "log-log curves", title = "log-log plot for covariate risk")
+
+
+km.est3 <- survfit(diabetic_surv ~ juvenile, data = diabetic)
+ggsurvplot(km.est3, fun = "cloglog", xlab = "time", ylab = "log-log survival", main = "log-log curves", title = 'log-log plot for covariate age')
+
+
+km.est4 <- survfit(diabetic_surv ~ eye, data = diabetic)
+ggsurvplot(km.est4, fun = "cloglog", xlab = "time", ylab = "log-log survival", main = "log-log curves", title = 'log-log plot for covariate eye')
+
+
+km.est5 <- survfit(diabetic_surv ~ laser, data = diabetic)
+ggsurvplot(km.est5, fun = "cloglog", xlab = "time", ylab = "log-log survival", main = "log-log curves",title = 'log-log plot for covariate laser')
+
+```
+The plot is parallel, we can assume there is no reason to stratify the treatment data and conclude that the hazard ratio assumption is valid. 
+
+
+Hazard Ratio
+```{r}
+ggforest(fit1,data=diabetic)
+ggforest(coxph(diabetic_surv ~ risk + trt, data = diabetic))
+ggforest(coxph(diabetic_surv ~ as.numeric(risk) + trt,  data = diabetic))
+
+
+```
+It is shown that treatment has a center of 0.43 with a 95% confidence interval from 0.31 to 0.6. It can be reported that the individuals' eye that received treatment has 57% less likelihood to extend actuall time to vision loss (in months) than the eyes that did not receive the treatment.
+There is no risk group 8 since there is not recorded data for that risk group.
+Looking at risk group 8, we can see that the hazard ratio is centered at 0.96 with a 95% confidence interval between 0.35 and 2.6. This shows that there is a 4% less likelihood to extend actual time to vision loss compared to a risk factor of 6. 
+Risk group 9 is centered around 0.92, with a 95% confidence interval between 0.39 - 2.2. It is shown that there is a 5% less likelihood to extend actual time to vision loss compared to a risk factor of 6.
+Risk group 10 is centered around 2.82 and has a 95% confidence interval from 1.2 - 6.6 meaning it can 182% more likelihood to extend actual time to vision loss compared to a risk factor of 6. 
+Risk factor of 11 is centered around 1.34 with a 95% confidence interval between 0.55 - 3.3. There is 34% more likelihood to extend actual time to vision loss compared to a risk factor of 6.
+Lastly, risk factor of 12 is centered around 1.71 with a 95% confidence interval between 0.70 - 4.2, meaning there is a 71% more likelihood to extend actual time to vision loss compared to a risk factor of 6. 
+For lower risk scores, extending vision time through surgery may not be necessary as it may lead to the same length of vision without surgery. Thus, there is less of a likelihood for risk scores of 9 and below. For the risk groups of 10 and above, surgery would be a between option because they would, in general, have less vision time left. Performing the surgery could extend their vision time in comparison to not recieving the surgery. 
+
+
+
+
+
+
+
+
