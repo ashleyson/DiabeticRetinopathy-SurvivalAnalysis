@@ -1,6 +1,6 @@
 ---
 title: "Diabetic Retinopathy Survival Analysis"
-author: "Ashley Son, Matthew Lee, Victor Bai"
+author: "Ashley Son"
 date: "2022-11-22"
 output:
   pdf_document: default
